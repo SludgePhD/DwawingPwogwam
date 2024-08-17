@@ -8,6 +8,7 @@ use std::{
 
 use anyhow::bail;
 use bytemuck::NoUninit;
+use half::f16;
 use wgpu::{
     util::{DeviceExt, TextureDataOrder},
     Adapter, Backends, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
@@ -31,7 +32,7 @@ use winit::{
 
 use crate::{
     cmd::Cmd,
-    math::{lerp, vec2, Vec2f, Vec2u},
+    math::{lerp, vec2, vec3, vec4, Vec2f, Vec2u, Vec3f, Vec4f, Vec4h},
 };
 
 const ALPHA_MODE: CompositeAlphaMode = CompositeAlphaMode::PreMultiplied;
@@ -417,50 +418,16 @@ impl App {
         );
         let canvas = Drawable::empty(&gpu, size.width, size.height);
 
-        let brush = Drawable::from_texture(
-            &gpu,
-            gpu.device.create_texture_with_data(
-                &gpu.queue,
-                &TextureDescriptor {
-                    label: None,
-                    size: Extent3d {
-                        width: 8,
-                        height: 8,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: TextureDimension::D2,
-                    format: TextureFormat::R8Unorm,
-                    usage: TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                },
-                TextureDataOrder::MipMajor,
-                &[0xff; 8 * 8],
-            ),
-        );
-        let cursor_draw = Drawable::from_texture(
-            &gpu,
-            gpu.device.create_texture_with_data(
-                &gpu.queue,
-                &TextureDescriptor {
-                    label: None,
-                    size: Extent3d {
-                        width: 8,
-                        height: 8,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: TextureDimension::D2,
-                    format: TextureFormat::R8Unorm,
-                    usage: TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                },
-                TextureDataOrder::MipMajor,
-                &[0xff; 8 * 8],
-            ),
-        );
+        let brush = Brush {
+            size: 5,
+            color: vec3(1.0, 1.0, 1.0),
+        }
+        .into_drawable(&gpu);
+        let cursor_draw = Brush {
+            size: 5,
+            color: vec3(1.0, 0.5, 0.5),
+        }
+        .into_drawable(&gpu);
         Ok(Win {
             pass_paint: PassData::new(&mut gpu),
             pass_display: PassData::new(&mut gpu),
@@ -471,7 +438,7 @@ impl App {
             brush,
             cursor_draw,
             cursor_pos: None,
-            stroke: Stroke::new(4.0),
+            stroke: Stroke::new(1.0),
         })
     }
 }
@@ -777,5 +744,57 @@ impl Drawable {
             drawable_bg: &self.drawable_bg,
             instances: range.clone(),
         });
+    }
+}
+
+struct Brush {
+    size: u32,
+    color: Vec3f,
+}
+
+impl Brush {
+    fn sample(&self, pos: Vec2f) -> Vec4f {
+        let strength = 1.0 - pos.length();
+        let c = self.color;
+        vec4(c[0], c[1], c[2], 1.0) * strength
+    }
+
+    fn into_drawable(self, gpu: &Gpu) -> Drawable {
+        let mut pixels = vec![Vec4h::ZERO; (self.size * self.size) as usize];
+        for y in 0..self.size {
+            let yf = (y as f32 + 0.5) / self.size as f32;
+            for x in 0..self.size {
+                let xf = (x as f32 + 0.5) / self.size as f32;
+                let uv = vec2(xf, yf);
+                let offset = uv - vec2(0.5, 0.5);
+
+                // NB: not perceptually uniform
+                let color = self.sample(offset * 2.0);
+                pixels[(y * self.size + x) as usize] = color.map(f16::from_f32);
+            }
+        }
+
+        Drawable::from_texture(
+            gpu,
+            gpu.device.create_texture_with_data(
+                &gpu.queue,
+                &TextureDescriptor {
+                    label: None,
+                    size: Extent3d {
+                        width: self.size,
+                        height: self.size,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: TextureDimension::D2,
+                    format: TextureFormat::Rgba16Float, // (f32 is not filterable by default)
+                    usage: TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                },
+                TextureDataOrder::MipMajor,
+                bytemuck::cast_slice(&pixels),
+            ),
+        )
     }
 }
