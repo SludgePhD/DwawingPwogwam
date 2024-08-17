@@ -1,10 +1,9 @@
 use std::{
     array,
-    ops::{Add, AddAssign, Div, Index, Mul, RangeInclusive, Sub},
+    ops::{Add, AddAssign, Div, Index, IndexMut, Mul, RangeInclusive, Sub},
 };
 
 use bytemuck::NoUninit;
-use half::f16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
@@ -20,8 +19,6 @@ impl<T, const N: usize> Vec<T, N> {
 }
 
 impl<const N: usize> Vec<f32, N> {
-    pub const ZERO: Self = Self([0.0; N]);
-
     pub fn dist(self, other: Self) -> f32 {
         let mut sum = 0.0;
         for (&a, &b) in self.0.iter().zip(&other.0) {
@@ -40,10 +37,6 @@ impl<const N: usize> Vec<f32, N> {
     }
 }
 
-impl<const N: usize> Vec<f16, N> {
-    pub const ZERO: Self = Self([f16::ZERO; N]);
-}
-
 // Safety: `[T; N]` has no padding iff `T` has no padding.
 unsafe impl<T: NoUninit, const N: usize> NoUninit for Vec<T, N> {}
 
@@ -54,7 +47,6 @@ pub type Vec3<T> = Vec<T, 3>;
 pub type Vec3f = Vec3<f32>;
 pub type Vec4<T> = Vec<T, 4>;
 pub type Vec4f = Vec4<f32>;
-pub type Vec4h = Vec4<f16>;
 
 impl<T, const N: usize> From<[T; N]> for Vec<T, N> {
     fn from(value: [T; N]) -> Self {
@@ -137,6 +129,12 @@ impl<T, const N: usize> Index<usize> for Vec<T, N> {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.0[index]
+    }
+}
+
+impl<T, const N: usize> IndexMut<usize> for Vec<T, N> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.0[index]
     }
 }
 

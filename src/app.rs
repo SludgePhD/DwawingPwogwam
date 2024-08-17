@@ -33,7 +33,7 @@ use winit::{
 use crate::{
     cmd::{Cmd, Tool},
     config::Config,
-    math::{lerp, vec2, vec3, vec4, Vec2f, Vec2u, Vec3f, Vec4f, Vec4h},
+    math::{lerp, vec2, vec3, vec4, Vec2f, Vec2u, Vec3f, Vec4f},
 };
 
 const ALPHA_MODE: CompositeAlphaMode = CompositeAlphaMode::PreMultiplied;
@@ -854,7 +854,7 @@ impl Brush {
     }
 
     fn into_drawable(self, gpu: &Gpu) -> Drawable {
-        let mut pixels = vec![Vec4h::ZERO; (self.size * self.size) as usize];
+        let mut pixels = Vec::with_capacity((self.size * self.size) as usize);
         for y in 0..self.size {
             let yf = (y as f32 + 0.5) / self.size as f32;
             for x in 0..self.size {
@@ -862,9 +862,11 @@ impl Brush {
                 let uv = vec2(xf, yf);
                 let offset = uv - vec2(0.5, 0.5);
 
-                // NB: not perceptually uniform
+                // FIXME: everything is sRGBified to make the sprite more perceptually uniform
+                // very ugly to do it this way
                 let color = self.sample(offset * 2.0);
-                pixels[(y * self.size + x) as usize] = color.map(f16::from_f32);
+                let srgb = color.map(|ch| ch.powf(2.2));
+                pixels.push(srgb.map(f16::from_f32));
             }
         }
 
