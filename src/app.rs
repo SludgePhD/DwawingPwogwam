@@ -32,12 +32,14 @@ use winit::{
 
 use crate::{
     cmd::{Cmd, Tool},
+    config::Config,
     math::{lerp, vec2, vec3, vec4, Vec2f, Vec2u, Vec3f, Vec4f, Vec4h},
 };
 
 const ALPHA_MODE: CompositeAlphaMode = CompositeAlphaMode::PreMultiplied;
 
 pub struct App {
+    config: Config,
     instance: wgpu::Instance,
     win: Option<Win>,
 }
@@ -416,8 +418,9 @@ impl Win {
 }
 
 impl App {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new(config: Config) -> anyhow::Result<Self> {
         Ok(Self {
+            config,
             instance: wgpu::Instance::new(InstanceDescriptor {
                 backends: Backends::PRIMARY,
                 ..Default::default()
@@ -427,13 +430,44 @@ impl App {
     }
 
     fn create_win(&self, event_loop: &ActiveEventLoop) -> anyhow::Result<Win> {
-        // FIXME: set monitor handle
+        let mut target_monitor = None;
+        for monitor in event_loop.available_monitors() {
+            let Some(name) = monitor.name() else {
+                continue;
+            };
+            let size = monitor.size();
+            let pos = monitor.position();
+            log::debug!(
+                "monitor '{name}': {}x{} @ ({},{})",
+                size.width,
+                size.height,
+                pos.x,
+                pos.y
+            );
+
+            if Some(&name) == self.config.monitor.as_ref() {
+                target_monitor = Some(monitor);
+            }
+        }
+
+        if let Some(mon) = &self.config.monitor {
+            if target_monitor.is_none() {
+                bail!("failed to find configured monitor output '{mon}'");
+            }
+        }
+
+        if target_monitor.is_none() {
+            // Try to always use the primary monitor by default. Note that Wayland does not support
+            // this, so we'll end up with the *current* monitor there.
+            target_monitor = event_loop.primary_monitor();
+        }
+
         let window = Arc::new(
             event_loop.create_window(
                 Window::default_attributes()
                     .with_window_level(WindowLevel::AlwaysOnTop)
                     .with_transparent(true)
-                    .with_fullscreen(Some(Fullscreen::Borderless(None)))
+                    .with_fullscreen(Some(Fullscreen::Borderless(target_monitor)))
                     .with_title("Dwawing Pwogwam"),
             )?,
         );

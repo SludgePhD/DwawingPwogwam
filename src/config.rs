@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct Config {
+    pub monitor: Option<String>,
     #[serde(rename = "device")]
     pub devices: Vec<Device>,
 }

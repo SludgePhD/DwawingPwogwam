@@ -10,11 +10,11 @@ use evdev::AbsoluteAxisType;
 
 use crate::{
     cmd::{Cmd, Tool},
-    config::{self, CommandVerb, Config},
+    config::{self, CommandVerb},
 };
 
-pub fn spawn(config: Config, send_cmd: impl Fn(Cmd) + Send + Sync + 'static) {
-    thread::spawn(move || wrap(move || input_main_loop(config, Arc::new(send_cmd))));
+pub fn spawn(devices: Vec<config::Device>, send_cmd: impl Fn(Cmd) + Send + Sync + 'static) {
+    thread::spawn(move || wrap(move || input_main_loop(devices, Arc::new(send_cmd))));
 }
 
 fn wrap(f: impl FnOnce() -> anyhow::Result<()>) {
@@ -37,17 +37,17 @@ fn wrap(f: impl FnOnce() -> anyhow::Result<()>) {
 }
 
 fn input_main_loop(
-    mut config: Config,
+    mut devices: Vec<config::Device>,
     send_cmd: Arc<dyn Fn(Cmd) + Send + Sync>,
 ) -> anyhow::Result<()> {
     let mut handles = Vec::new();
     for (path, mut device) in evdev::enumerate() {
         let Some(name) = device.name() else { continue };
 
-        let Some(i) = config.devices.iter().position(|dev| dev.name == name) else {
+        let Some(i) = devices.iter().position(|dev| dev.name == name) else {
             continue;
         };
-        let dev = config.devices.swap_remove(i);
+        let dev = devices.swap_remove(i);
 
         log::info!(
             "found matching input device at `{}`: {name}",

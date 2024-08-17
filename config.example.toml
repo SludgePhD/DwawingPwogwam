@@ -1,3 +1,5 @@
+#monitor = "DP-1"  # if omitted, will use the primary monitor or the currently active monitor
+
 [[device]]
 name = "OpenTabletDriver Virtual Artist Tablet"
 grab = true  # make device inaccessible to other software (including the window manager/compositor)
