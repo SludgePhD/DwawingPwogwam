@@ -1,0 +1,11 @@
+[[device]]
+name = "OpenTabletDriver Virtual Artist Tablet"
+grab = true  # make device inaccessible to other software (including the window manager/compositor)
+tablet = true  # process absolute axis events from this device
+bind.BTN_STYLUS  = "TOOL_ERASER" # lower button on pen - enable eraser while held
+bind.BTN_STYLUS2 = "TOOL_MOVE"   # upper button on pen
+
+[[device]]
+name = "OpenTabletDriver Virtual Keyboard"
+grab = true
+bind.KEY_A = "CLEAR"

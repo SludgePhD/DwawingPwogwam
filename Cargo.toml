@@ -1,0 +1,21 @@
+[package]
+name = "DwawingPwogwam"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+log = "0.4.21"
+env_logger = { version = "0.11.3", default-features = false, features = ["auto-color"] }
+
+# window management and drawing
+winit = { version = "0.30.4", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
+wgpu = "22"
+pollster = "0.3.0"
+raw-window-handle = "0.6.1"
+bytemuck = { version = "1", features = ["derive"] }
+
+# config parsing and input handling
+toml = "0.5.9"
+serde = { version = "1.0.147", features = ["derive"] }
+evdev = { version = "0.12.2", features = ["serde"] }
