@@ -1,5 +1,7 @@
 use std::{
-    mem, process,
+    mem,
+    ops::Range,
+    process,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -11,14 +13,14 @@ use wgpu::{
     Adapter, Backends, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
     BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingResource, BindingType, BlendState,
     Buffer, BufferBindingType, BufferDescriptor, BufferUsages, Color, ColorTargetState,
-    ColorWrites, CommandEncoder, CompositeAlphaMode, Device, DeviceDescriptor, Extent3d,
-    FilterMode, FragmentState, InstanceDescriptor, LoadOp, MemoryHints, MultisampleState,
-    Operations, PipelineCompilationOptions, PipelineLayoutDescriptor, PrimitiveState,
-    PrimitiveTopology, Queue, RenderPass, RenderPassColorAttachment, RenderPassDescriptor,
-    RenderPipeline, RenderPipelineDescriptor, RequestAdapterOptions, SamplerBindingType,
-    SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages, Surface, SurfaceError,
-    SurfaceTarget, Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType,
-    TextureUsages, TextureViewDimension, VertexState,
+    ColorWrites, CompositeAlphaMode, Device, DeviceDescriptor, Extent3d, FilterMode, FragmentState,
+    InstanceDescriptor, LoadOp, MemoryHints, MultisampleState, Operations,
+    PipelineCompilationOptions, PipelineLayoutDescriptor, PrimitiveState, PrimitiveTopology, Queue,
+    RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
+    RequestAdapterOptions, Sampler, SamplerBindingType, SamplerDescriptor, ShaderModuleDescriptor,
+    ShaderSource, ShaderStages, Surface, SurfaceError, SurfaceTarget, Texture, TextureDescriptor,
+    TextureDimension, TextureFormat, TextureSampleType, TextureUsages, TextureView,
+    TextureViewDimension, VertexState,
 };
 use winit::{
     application::ApplicationHandler,
@@ -39,6 +41,7 @@ pub struct App {
     win: Option<Win>,
 }
 
+/// Global renderer data.
 struct Gpu {
     adapter: Adapter,
     device: Device,
@@ -46,12 +49,19 @@ struct Gpu {
     /// Format of the window surface, used as the format of every render target.
     format: TextureFormat,
 
-    render_pipeline: RenderPipeline,
-    sampler_bg: BindGroup,
+    /// Scheduled instances.
+    instances: Vec<Instance>,
+    /// Global instance buffer. Holds every drawable instance that will be drawn in the dispatch.
+    instance_buf: Buffer,
 
-    texture_bgl: BindGroupLayout,
-    uniforms_bgl: BindGroupLayout,
-    instances_bgl: BindGroupLayout,
+    render_pipeline: RenderPipeline,
+    sampler: Sampler,
+
+    global_bgl: BindGroupLayout,
+    pass_bgl: BindGroupLayout,
+    drawable_bgl: BindGroupLayout,
+
+    global_bg: Option<BindGroup>,
 }
 
 impl Gpu {
@@ -97,30 +107,29 @@ impl Gpu {
         });
 
         // BGLs
-        let sampler_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("sampler"),
-            entries: &[BindGroupLayoutEntry {
-                binding: 0,
-                count: None,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Sampler(SamplerBindingType::Filtering),
-            }],
-        });
-        let texture_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("texture"),
-            entries: &[BindGroupLayoutEntry {
-                binding: 0,
-                count: None,
-                visibility: ShaderStages::VERTEX_FRAGMENT,
-                ty: BindingType::Texture {
-                    sample_type: TextureSampleType::Float { filterable: true },
-                    view_dimension: TextureViewDimension::D2,
-                    multisampled: false,
+        let global_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("global"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    count: None,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
                 },
-            }],
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    count: None,
+                    visibility: ShaderStages::VERTEX,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                },
+            ],
         });
-        let uniforms_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("uniforms"),
+        let pass_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("pass"),
             entries: &[BindGroupLayoutEntry {
                 binding: 0,
                 count: None,
@@ -132,16 +141,16 @@ impl Gpu {
                 },
             }],
         });
-        let instances_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("instances"),
+        let drawable_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("drawable"),
             entries: &[BindGroupLayoutEntry {
                 binding: 0,
                 count: None,
                 visibility: ShaderStages::VERTEX_FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+                ty: BindingType::Texture {
+                    sample_type: TextureSampleType::Float { filterable: true },
+                    view_dimension: TextureViewDimension::D2,
+                    multisampled: false,
                 },
             }],
         });
@@ -151,7 +160,7 @@ impl Gpu {
             label: Some("main_render_pipeline"),
             layout: Some(&device.create_pipeline_layout(&PipelineLayoutDescriptor {
                 label: Some("main_render_pipeline"),
-                bind_group_layouts: &[&sampler_bgl, &texture_bgl, &uniforms_bgl, &instances_bgl],
+                bind_group_layouts: &[&global_bgl, &pass_bgl, &drawable_bgl],
                 ..Default::default()
             })),
             vertex: VertexState {
@@ -184,13 +193,11 @@ impl Gpu {
             min_filter: FilterMode::Linear,
             ..Default::default()
         });
-        let sampler_bg = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("sampler"),
-            layout: &sampler_bgl,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::Sampler(&sampler),
-            }],
+        let instance_buf = device.create_buffer(&BufferDescriptor {
+            label: None,
+            size: mem::size_of::<Instance>() as u64, // 1 instance preallocated
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
         Ok(Gpu {
@@ -198,11 +205,65 @@ impl Gpu {
             device,
             queue,
             format: config.format,
+
+            instances: Vec::new(),
+            instance_buf,
+
             render_pipeline,
-            sampler_bg,
-            texture_bgl,
-            uniforms_bgl,
-            instances_bgl,
+            sampler,
+
+            global_bgl,
+            pass_bgl,
+            drawable_bgl,
+
+            global_bg: None,
+        })
+    }
+
+    fn schedule_instances(&mut self, instances: &[Instance]) -> Range<u32> {
+        let start = self.instances.len() as u32;
+        let end = start + instances.len() as u32;
+
+        self.instances.extend_from_slice(instances);
+
+        start..end
+    }
+
+    /// Writes all scheduled instances to the instance buffer (reallocating it if it is too small).
+    fn prepare_instances(&mut self) {
+        let size = (mem::size_of::<Instance>() * self.instances.len()) as u64;
+        if self.instance_buf.size() < size {
+            self.instance_buf = self.device.create_buffer(&BufferDescriptor {
+                label: None,
+                size,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.global_bg = None;
+        }
+        self.queue
+            .write_buffer(&self.instance_buf, 0, bytemuck::cast_slice(&self.instances));
+        self.instances.clear();
+    }
+
+    fn global_bind_group(&mut self) -> &BindGroup {
+        self.global_bg.get_or_insert_with(|| {
+            self.device.create_bind_group(&BindGroupDescriptor {
+                label: None,
+                layout: &self.global_bgl,
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::Sampler(&self.sampler),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: BindingResource::Buffer(
+                            self.instance_buf.as_entire_buffer_binding(),
+                        ),
+                    },
+                ],
+            })
         })
     }
 }
@@ -211,6 +272,9 @@ struct Win {
     window: Arc<Window>,
     surface: Surface<'static>,
     gpu: Gpu,
+
+    pass_paint: PassData,
+    pass_display: PassData,
 
     canvas: Drawable,
     brush: Drawable,
@@ -257,38 +321,60 @@ impl Win {
             }
         };
 
-        self.update_cursor();
         let size = self.window.inner_size();
-        self.canvas.set_position(
-            &self.gpu,
-            vec2(size.width as f32 * 0.5, size.height as f32 * 0.5),
-        );
+        let canvas_pos = vec2(size.width as f32 * 0.5, size.height as f32 * 0.5);
 
-        let mut enc = self.gpu.device.create_command_encoder(&Default::default());
+        let mut rec = Vec::new();
 
-        self.stroke.put_impressions(&self.gpu, &mut self.brush);
-
-        let mut pass = Pass::new(&self.gpu, &mut enc, &self.canvas.texture, None);
-        self.brush.draw(&mut pass);
-        drop(pass);
+        let mut pass = self
+            .pass_paint
+            .start(&mut self.gpu, &self.canvas.texture, None);
+        self.stroke.draw(&mut pass, &mut self.brush);
+        rec.push(pass.finish());
 
         // Draw the canvas and cursor onto the window surface.
-        let mut pass = Pass::new(&self.gpu, &mut enc, &st.texture, Some(Color::TRANSPARENT));
-        self.canvas.draw(&mut pass);
-        self.cursor_draw.draw(&mut pass);
-        drop(pass);
+        let mut pass =
+            self.pass_display
+                .start(&mut self.gpu, &st.texture, Some(Color::TRANSPARENT));
+        self.canvas.draw_at(&mut pass, canvas_pos);
+        if let Some(pos) = self.cursor_pos {
+            self.cursor_draw.draw_at(&mut pass, pos);
+        }
+        rec.push(pass.finish());
+
+        // Write all scheduled instances before submission.
+        self.gpu.prepare_instances();
+
+        let mut enc = self.gpu.device.create_command_encoder(&Default::default());
+        for rec in rec {
+            let mut pass = enc.begin_render_pass(&RenderPassDescriptor {
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &rec.target,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: if let Some(clear) = rec.clear {
+                            LoadOp::Clear(clear)
+                        } else {
+                            LoadOp::Load
+                        },
+                        ..Default::default()
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.gpu.render_pipeline);
+            pass.set_bind_group(0, self.gpu.global_bind_group(), &[]);
+            pass.set_bind_group(1, &rec.data.pass_bg, &[]);
+
+            for draw in rec.draws {
+                pass.set_bind_group(2, &draw.drawable_bg, &[]);
+                pass.draw(0..4, draw.instances);
+            }
+        }
 
         self.gpu.queue.submit([enc.finish()]);
         self.window.pre_present_notify();
         st.present();
-    }
-
-    fn update_cursor(&mut self) {
-        // (later: configure the right type of cursor)
-        match self.cursor_pos {
-            Some(pos) => self.cursor_draw.set_position(&self.gpu, pos),
-            None => self.cursor_draw.clear(),
-        }
     }
 }
 
@@ -320,7 +406,7 @@ impl App {
             .instance
             .create_surface(SurfaceTarget::from(window.clone()))?;
         let res = window.inner_size();
-        let gpu = Gpu::new(&self.instance, &surface, res.width, res.height)?;
+        let mut gpu = Gpu::new(&self.instance, &surface, res.width, res.height)?;
 
         let size = window.inner_size();
         log::debug!(
@@ -376,6 +462,8 @@ impl App {
             ),
         );
         Ok(Win {
+            pass_paint: PassData::new(&mut gpu),
+            pass_display: PassData::new(&mut gpu),
             window,
             surface,
             gpu,
@@ -529,15 +617,15 @@ impl Stroke {
     }
 
     /// Schedules the queued impressions to be drawn with `brush`.
-    fn put_impressions(&mut self, gpu: &Gpu, brush: &mut Drawable) {
-        brush.set_instances(gpu, &self.impressions);
+    fn draw<'a>(&mut self, pass: &mut Pass<'_, 'a>, brush: &'a mut Drawable) {
+        brush.draw_instances(pass, &self.impressions);
         self.impressions.clear();
     }
 }
 
 #[derive(Clone, Copy, NoUninit)]
 #[repr(C)]
-struct Uniforms {
+struct PassUniforms {
     render_target_size: Vec2u,
 }
 
@@ -560,51 +648,88 @@ impl Instance {
     }
 }
 
-struct Pass<'a> {
-    gpu: &'a Gpu,
-    pass: RenderPass<'a>,
-    render_target_size: Vec2u,
+struct PassData {
+    uniforms: Buffer,
+    pass_bg: BindGroup,
 }
 
-impl<'a> Pass<'a> {
-    fn new(
-        gpu: &'a Gpu,
-        enc: &'a mut CommandEncoder,
-        target: &Texture,
-        clear: Option<Color>,
-    ) -> Self {
-        let pass = enc.begin_render_pass(&RenderPassDescriptor {
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &target.create_view(&Default::default()),
-                resolve_target: None,
-                ops: Operations {
-                    load: if let Some(clear) = clear {
-                        LoadOp::Clear(clear)
-                    } else {
-                        LoadOp::Load
-                    },
-                    ..Default::default()
-                },
-            })],
-            ..Default::default()
+impl PassData {
+    fn new(gpu: &mut Gpu) -> Self {
+        let uniforms = gpu.device.create_buffer(&BufferDescriptor {
+            label: None,
+            size: mem::size_of::<PassUniforms>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let pass_bg = gpu.device.create_bind_group(&BindGroupDescriptor {
+            label: None,
+            layout: &gpu.pass_bgl,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::Buffer(uniforms.as_entire_buffer_binding()),
+            }],
         });
 
-        Self {
-            gpu,
-            pass,
+        Self { uniforms, pass_bg }
+    }
+
+    fn start<'gpu, 'a>(
+        &'a self,
+        gpu: &'gpu mut Gpu,
+        target: &Texture,
+        clear: Option<Color>,
+    ) -> Pass<'gpu, 'a> {
+        let uniforms = PassUniforms {
             render_target_size: vec2(target.width(), target.height()),
+        };
+        gpu.queue
+            .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
+
+        Pass {
+            gpu,
+            clear,
+            target: target.create_view(&Default::default()),
+            data: self,
+            draws: Vec::new(),
+        }
+    }
+}
+
+/// A buffered draw operation.
+struct Draw<'a> {
+    drawable_bg: &'a BindGroup,
+    instances: Range<u32>,
+}
+
+struct Pass<'gpu, 'a> {
+    gpu: &'gpu mut Gpu,
+    clear: Option<Color>,
+    target: TextureView,
+    data: &'a PassData,
+    draws: Vec<Draw<'a>>,
+}
+
+struct RecordedPass<'a> {
+    draws: Vec<Draw<'a>>,
+    target: TextureView,
+    data: &'a PassData,
+    clear: Option<Color>,
+}
+
+impl<'a> Pass<'_, 'a> {
+    fn finish(self) -> RecordedPass<'a> {
+        RecordedPass {
+            draws: self.draws,
+            target: self.target,
+            data: self.data,
+            clear: self.clear,
         }
     }
 }
 
 struct Drawable {
     texture: Texture,
-    uniform_buf: Buffer,
-    instance_buf: Buffer,
-    texture_bg: BindGroup,
-    uniforms_bg: BindGroup,
-    instances_bg: BindGroup,
-    instance_count: u32,
+    drawable_bg: BindGroup,
 }
 
 impl Drawable {
@@ -627,107 +752,30 @@ impl Drawable {
     }
 
     fn from_texture(gpu: &Gpu, texture: Texture) -> Self {
-        let uniform_buf = gpu.device.create_buffer(&BufferDescriptor {
+        let drawable_bg = gpu.device.create_bind_group(&BindGroupDescriptor {
             label: None,
-            size: mem::size_of::<Uniforms>() as u64,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let instance_buf = gpu.device.create_buffer(&BufferDescriptor {
-            label: None,
-            size: mem::size_of::<Instance>() as u64, // 1 instance preallocated
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let texture_bg = gpu.device.create_bind_group(&BindGroupDescriptor {
-            label: None,
-            layout: &gpu.texture_bgl,
+            layout: &gpu.drawable_bgl,
             entries: &[BindGroupEntry {
                 binding: 0,
                 resource: BindingResource::TextureView(&texture.create_view(&Default::default())),
             }],
         });
-        let uniforms_bg = gpu.device.create_bind_group(&BindGroupDescriptor {
-            label: None,
-            layout: &gpu.uniforms_bgl,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::Buffer(uniform_buf.as_entire_buffer_binding()),
-            }],
-        });
-        let instances_bg = gpu.device.create_bind_group(&BindGroupDescriptor {
-            label: None,
-            layout: &gpu.instances_bgl,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::Buffer(instance_buf.as_entire_buffer_binding()),
-            }],
-        });
 
         Self {
             texture,
-            uniform_buf,
-            instance_buf,
-            texture_bg,
-            uniforms_bg,
-            instances_bg,
-            instance_count: 0,
+            drawable_bg,
         }
     }
 
-    fn clear(&mut self) {
-        self.instance_count = 0;
+    fn draw_at<'a>(&'a self, p: &mut Pass<'_, 'a>, position: Vec2f) {
+        self.draw_instances(p, &[Instance::new(position, 1.0)]);
     }
 
-    fn set_position(&mut self, gpu: &Gpu, pos: Vec2f) {
-        self.set_instances(
-            gpu,
-            &[Instance {
-                pos,
-                opacity: 1.0,
-                _padding: 0.0,
-            }],
-        );
-    }
-
-    fn set_instances(&mut self, gpu: &Gpu, instances: &[Instance]) {
-        let size = (mem::size_of::<Instance>() * instances.len()) as u64;
-        if self.instance_buf.size() < size {
-            self.instance_buf = gpu.device.create_buffer(&BufferDescriptor {
-                label: None,
-                size,
-                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.instances_bg = gpu.device.create_bind_group(&BindGroupDescriptor {
-                label: None,
-                layout: &gpu.instances_bgl,
-                entries: &[BindGroupEntry {
-                    binding: 0,
-                    resource: BindingResource::Buffer(self.instance_buf.as_entire_buffer_binding()),
-                }],
-            });
-        }
-        gpu.queue
-            .write_buffer(&self.instance_buf, 0, bytemuck::cast_slice(instances));
-        self.instance_count = instances.len() as u32;
-    }
-
-    fn draw(&self, p: &mut Pass<'_>) {
-        // FIXME: footgun! we're overwriting the uniforms here, but that can only be done once per submission and `Drawable`
-        // (on second thought the same thing applies to the instance buffer modified above)
-        let uniforms = Uniforms {
-            render_target_size: p.render_target_size,
-        };
-        p.gpu
-            .queue
-            .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
-
-        p.pass.set_pipeline(&p.gpu.render_pipeline);
-        p.pass.set_bind_group(0, &p.gpu.sampler_bg, &[]);
-        p.pass.set_bind_group(1, &self.texture_bg, &[]);
-        p.pass.set_bind_group(2, &self.uniforms_bg, &[]);
-        p.pass.set_bind_group(3, &self.instances_bg, &[]);
-        p.pass.draw(0..4, 0..self.instance_count);
+    fn draw_instances<'a>(&'a self, p: &mut Pass<'_, 'a>, instances: &[Instance]) {
+        let range = p.gpu.schedule_instances(instances);
+        p.draws.push(Draw {
+            drawable_bg: &self.drawable_bg,
+            instances: range.clone(),
+        });
     }
 }

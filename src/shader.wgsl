@@ -3,7 +3,8 @@
 // Draws instances of a texture onto the render target. Used both for drawing onto the canvas,
 // and also for displaying the canvas on the window surface.
 
-struct Uniforms {
+/// Uniforms tied to the render pass (may vary when rendering to multiple different render targets).
+struct PassUniforms {
     /// Dimensions of the render target (in pixels).
     render_target_size: vec2u,
 }
@@ -16,17 +17,19 @@ struct Instance {
     opacity: f32,
 }
 
+// Group 0: Global bindings. They only change when the instance buffer fills up.
 @group(0) @binding(0)
 var samp: sampler;
-
-@group(1) @binding(0)
-var texture: texture_2d<f32>;
-
-@group(2) @binding(0)
-var<uniform> uniforms: Uniforms;
-
-@group(3) @binding(0)
+@group(0) @binding(1)
 var<storage, read> instances: array<Instance>;
+
+// Group 1: Per-pass bindings.
+@group(1) @binding(0)
+var<uniform> pass_uniforms: PassUniforms;
+
+// Group 2: Per-drawable bindings.
+@group(2) @binding(0)
+var texture: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position)
@@ -55,8 +58,8 @@ fn vertex(
     var positions = POSITIONS;
     let vert_pos = positions[v];
     let pix_pos = instances[i].pos + vert_pos * size;
-    let fract_pos = pix_pos / vec2f(uniforms.render_target_size);  // 0..1
-    let clip_pos = (fract_pos - vec2(0.5)) * vec2(2.0, -2.0);      // -1..1
+    let fract_pos = pix_pos / vec2f(pass_uniforms.render_target_size);  // 0..1
+    let clip_pos = (fract_pos - vec2(0.5)) * vec2(2.0, -2.0);  // -1..1
 
     var out: VertexOutput;
     out.position = vec4(clip_pos, 0.0, 1.0);
