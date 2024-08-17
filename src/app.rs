@@ -12,16 +12,16 @@ use half::f16;
 use wgpu::{
     util::{DeviceExt, TextureDataOrder},
     Adapter, Backends, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
-    BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingResource, BindingType, BlendState,
-    Buffer, BufferBindingType, BufferDescriptor, BufferUsages, Color, ColorTargetState,
-    ColorWrites, CompositeAlphaMode, Device, DeviceDescriptor, Extent3d, FilterMode, FragmentState,
-    InstanceDescriptor, LoadOp, MemoryHints, MultisampleState, Operations,
-    PipelineCompilationOptions, PipelineLayoutDescriptor, PrimitiveState, PrimitiveTopology, Queue,
-    RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
-    RequestAdapterOptions, Sampler, SamplerBindingType, SamplerDescriptor, ShaderModuleDescriptor,
-    ShaderSource, ShaderStages, Surface, SurfaceError, SurfaceTarget, Texture, TextureDescriptor,
-    TextureDimension, TextureFormat, TextureSampleType, TextureUsages, TextureView,
-    TextureViewDimension, VertexState,
+    BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingResource, BindingType, BlendComponent,
+    BlendFactor, BlendOperation, BlendState, Buffer, BufferBindingType, BufferDescriptor,
+    BufferUsages, Color, ColorTargetState, ColorWrites, CompositeAlphaMode, Device,
+    DeviceDescriptor, Extent3d, FilterMode, FragmentState, InstanceDescriptor, LoadOp, MemoryHints,
+    MultisampleState, Operations, PipelineCompilationOptions, PipelineLayoutDescriptor,
+    PrimitiveState, PrimitiveTopology, Queue, RenderPassColorAttachment, RenderPassDescriptor,
+    RenderPipeline, RenderPipelineDescriptor, RequestAdapterOptions, Sampler, SamplerBindingType,
+    SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages, Surface, SurfaceError,
+    SurfaceTarget, Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType,
+    TextureUsages, TextureView, TextureViewDimension, VertexState,
 };
 use winit::{
     application::ApplicationHandler,
@@ -31,7 +31,7 @@ use winit::{
 };
 
 use crate::{
-    cmd::Cmd,
+    cmd::{Cmd, Tool},
     math::{lerp, vec2, vec3, vec4, Vec2f, Vec2u, Vec3f, Vec4f, Vec4h},
 };
 
@@ -56,6 +56,7 @@ struct Gpu {
     instance_buf: Buffer,
 
     render_pipeline: RenderPipeline,
+    erase_pipeline: RenderPipeline,
     sampler: Sampler,
 
     global_bgl: BindGroupLayout,
@@ -157,38 +158,54 @@ impl Gpu {
         });
 
         // Pipeline.
-        let render_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("main_render_pipeline"),
-            layout: Some(&device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("main_render_pipeline"),
-                bind_group_layouts: &[&global_bgl, &pass_bgl, &drawable_bgl],
-                ..Default::default()
-            })),
-            vertex: VertexState {
-                module: &shader,
-                entry_point: "vertex",
-                compilation_options: PipelineCompilationOptions::default(),
-                buffers: &[],
+        let make_pipeline = |blend: BlendState| {
+            device.create_render_pipeline(&RenderPipelineDescriptor {
+                label: None,
+                layout: Some(&device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                    label: None,
+                    bind_group_layouts: &[&global_bgl, &pass_bgl, &drawable_bgl],
+                    ..Default::default()
+                })),
+                vertex: VertexState {
+                    module: &shader,
+                    entry_point: "vertex",
+                    compilation_options: PipelineCompilationOptions::default(),
+                    buffers: &[],
+                },
+                primitive: PrimitiveState {
+                    topology: PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: MultisampleState::default(),
+                fragment: Some(FragmentState {
+                    module: &shader,
+                    entry_point: "fragment",
+                    compilation_options: PipelineCompilationOptions::default(),
+                    targets: &[Some(ColorTargetState {
+                        format: config.format,
+                        blend: Some(blend),
+                        write_mask: ColorWrites::all(),
+                    })],
+                }),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let render_pipeline = make_pipeline(BlendState::PREMULTIPLIED_ALPHA_BLENDING);
+        let erase_pipeline = make_pipeline(BlendState {
+            color: BlendComponent {
+                src_factor: BlendFactor::One,
+                dst_factor: BlendFactor::One,
+                operation: BlendOperation::ReverseSubtract,
             },
-            primitive: PrimitiveState {
-                topology: PrimitiveTopology::TriangleStrip,
-                ..Default::default()
+            alpha: BlendComponent {
+                src_factor: BlendFactor::One,
+                dst_factor: BlendFactor::One,
+                operation: BlendOperation::ReverseSubtract,
             },
-            depth_stencil: None,
-            multisample: MultisampleState::default(),
-            fragment: Some(FragmentState {
-                module: &shader,
-                entry_point: "fragment",
-                compilation_options: PipelineCompilationOptions::default(),
-                targets: &[Some(ColorTargetState {
-                    format: config.format,
-                    blend: Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: ColorWrites::all(),
-                })],
-            }),
-            multiview: None,
-            cache: None,
         });
+
         let sampler = device.create_sampler(&SamplerDescriptor {
             mag_filter: FilterMode::Linear,
             min_filter: FilterMode::Linear,
@@ -211,6 +228,7 @@ impl Gpu {
             instance_buf,
 
             render_pipeline,
+            erase_pipeline,
             sampler,
 
             global_bgl,
@@ -280,7 +298,10 @@ struct Win {
     canvas: Drawable,
     brush: Drawable,
     cursor_draw: Drawable,
+    eraser: Drawable,
+    cursor_erase: Drawable,
 
+    tool: Tool,
     cursor_pos: Option<Vec2f>,
     stroke: Stroke,
 }
@@ -327,19 +348,30 @@ impl Win {
 
         let mut rec = Vec::new();
 
-        let mut pass = self
-            .pass_paint
-            .start(&mut self.gpu, &self.canvas.texture, None);
-        self.stroke.draw(&mut pass, &mut self.brush);
+        let mut pass = self.pass_paint.start(
+            &mut self.gpu,
+            &self.canvas.texture,
+            None,
+            self.tool == Tool::Erase,
+        );
+        match self.tool {
+            Tool::Draw => self.stroke.draw(&mut pass, &mut self.brush),
+            Tool::Erase => self.stroke.draw(&mut pass, &mut self.eraser),
+            Tool::MoveCanvas => self.stroke.discard(),
+        }
         rec.push(pass.finish());
 
         // Draw the canvas and cursor onto the window surface.
         let mut pass =
             self.pass_display
-                .start(&mut self.gpu, &st.texture, Some(Color::TRANSPARENT));
+                .start(&mut self.gpu, &st.texture, Some(Color::TRANSPARENT), false);
         self.canvas.draw_at(&mut pass, canvas_pos);
         if let Some(pos) = self.cursor_pos {
-            self.cursor_draw.draw_at(&mut pass, pos);
+            match self.tool {
+                Tool::Draw => self.cursor_draw.draw_at(&mut pass, pos),
+                Tool::Erase => self.cursor_erase.draw_at(&mut pass, pos),
+                Tool::MoveCanvas => {} // TODO
+            }
         }
         rec.push(pass.finish());
 
@@ -363,7 +395,11 @@ impl Win {
                 })],
                 ..Default::default()
             });
-            pass.set_pipeline(&self.gpu.render_pipeline);
+            if rec.erase {
+                pass.set_pipeline(&self.gpu.erase_pipeline);
+            } else {
+                pass.set_pipeline(&self.gpu.render_pipeline);
+            }
             pass.set_bind_group(0, self.gpu.global_bind_group(), &[]);
             pass.set_bind_group(1, &rec.data.pass_bg, &[]);
 
@@ -419,13 +455,23 @@ impl App {
         let canvas = Drawable::empty(&gpu, size.width, size.height);
 
         let brush = Brush {
-            size: 5,
+            size: 3,
             color: vec3(1.0, 1.0, 1.0),
         }
         .into_drawable(&gpu);
         let cursor_draw = Brush {
             size: 5,
             color: vec3(1.0, 0.5, 0.5),
+        }
+        .into_drawable(&gpu);
+        let eraser = Brush {
+            size: 20,
+            color: vec3(1.0, 1.0, 1.0),
+        }
+        .into_drawable(&gpu);
+        let cursor_erase = Brush {
+            size: 20,
+            color: vec3(1.0, 1.0, 1.0),
         }
         .into_drawable(&gpu);
         Ok(Win {
@@ -437,6 +483,10 @@ impl App {
             canvas,
             brush,
             cursor_draw,
+            eraser,
+            cursor_erase,
+
+            tool: Tool::Draw,
             cursor_pos: None,
             stroke: Stroke::new(1.0),
         })
@@ -504,8 +554,8 @@ impl ApplicationHandler<Cmd> for App {
                     Instant::now() + Duration::from_millis(100),
                 ));
             }
-            _ => {
-                // TODO
+            Cmd::SetTool { tool } => {
+                win.tool = tool;
             }
         }
     }
@@ -583,10 +633,15 @@ impl Stroke {
         }
     }
 
+    /// Discards the brush impressions that *would* be drawn by [`Stroke::draw`].
+    fn discard(&mut self) {
+        self.impressions.clear();
+    }
+
     /// Schedules the queued impressions to be drawn with `brush`.
     fn draw<'a>(&mut self, pass: &mut Pass<'_, 'a>, brush: &'a mut Drawable) {
         brush.draw_instances(pass, &self.impressions);
-        self.impressions.clear();
+        self.discard();
     }
 }
 
@@ -645,6 +700,7 @@ impl PassData {
         gpu: &'gpu mut Gpu,
         target: &Texture,
         clear: Option<Color>,
+        erase: bool,
     ) -> Pass<'gpu, 'a> {
         let uniforms = PassUniforms {
             render_target_size: vec2(target.width(), target.height()),
@@ -658,6 +714,7 @@ impl PassData {
             target: target.create_view(&Default::default()),
             data: self,
             draws: Vec::new(),
+            erase,
         }
     }
 }
@@ -671,6 +728,7 @@ struct Draw<'a> {
 struct Pass<'gpu, 'a> {
     gpu: &'gpu mut Gpu,
     clear: Option<Color>,
+    erase: bool,
     target: TextureView,
     data: &'a PassData,
     draws: Vec<Draw<'a>>,
@@ -681,6 +739,7 @@ struct RecordedPass<'a> {
     target: TextureView,
     data: &'a PassData,
     clear: Option<Color>,
+    erase: bool,
 }
 
 impl<'a> Pass<'_, 'a> {
@@ -690,6 +749,7 @@ impl<'a> Pass<'_, 'a> {
             target: self.target,
             data: self.data,
             clear: self.clear,
+            erase: self.erase,
         }
     }
 }

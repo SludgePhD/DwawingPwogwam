@@ -18,7 +18,7 @@ pub enum Cmd {
     },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
     Draw,
     Erase,
