@@ -78,10 +78,7 @@ impl Gpu {
         let adapter = pollster::block_on(instance.request_adapter(&RequestAdapterOptions {
             compatible_surface: Some(&surface),
             ..Default::default()
-        }));
-        let Some(adapter) = adapter else {
-            bail!("failed to find a supported graphics adapter")
-        };
+        }))?;
 
         let surface_caps = surface.get_capabilities(&adapter);
         if !surface_caps.alpha_modes.contains(&ALPHA_MODE) {
@@ -92,13 +89,10 @@ impl Gpu {
             );
         }
 
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &DeviceDescriptor {
-                memory_hints: MemoryHints::MemoryUsage,
-                ..Default::default()
-            },
-            None,
-        ))?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
+            memory_hints: MemoryHints::MemoryUsage,
+            ..Default::default()
+        }))?;
 
         let config = surface
             .get_default_config(&adapter, width, height)
@@ -170,7 +164,7 @@ impl Gpu {
                 })),
                 vertex: VertexState {
                     module: &shader,
-                    entry_point: "vertex",
+                    entry_point: None,
                     compilation_options: PipelineCompilationOptions::default(),
                     buffers: &[],
                 },
@@ -182,7 +176,7 @@ impl Gpu {
                 multisample: MultisampleState::default(),
                 fragment: Some(FragmentState {
                     module: &shader,
-                    entry_point: "fragment",
+                    entry_point: None,
                     compilation_options: PipelineCompilationOptions::default(),
                     targets: &[Some(ColorTargetState {
                         format: config.format,
@@ -406,7 +400,7 @@ impl Win {
             pass.set_bind_group(1, &rec.data.pass_bg, &[]);
 
             for draw in rec.draws {
-                pass.set_bind_group(2, &draw.drawable_bg, &[]);
+                pass.set_bind_group(2, draw.drawable_bg, &[]);
                 pass.draw(0..4, draw.instances);
             }
         }
@@ -421,7 +415,7 @@ impl App {
     pub fn new(config: Config) -> anyhow::Result<Self> {
         Ok(Self {
             config,
-            instance: wgpu::Instance::new(InstanceDescriptor {
+            instance: wgpu::Instance::new(&InstanceDescriptor {
                 backends: Backends::PRIMARY,
                 ..Default::default()
             }),
