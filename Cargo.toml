@@ -17,6 +17,6 @@ bytemuck = { version = "1", features = ["derive"] }
 half = { version = "2.4.1", features = ["bytemuck"] }
 
 # config parsing and input handling
-toml = "0.5.9"
+toml = { version = "0.8.23", default-features = false, features = ["parse"] }
 serde = { version = "1.0.147", features = ["derive"] }
 evdevil = "0.1.1"
