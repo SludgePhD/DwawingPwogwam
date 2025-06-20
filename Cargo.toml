@@ -19,4 +19,4 @@ half = { version = "2.4.1", features = ["bytemuck"] }
 # config parsing and input handling
 toml = "0.5.9"
 serde = { version = "1.0.147", features = ["derive"] }
-evdev = { version = "0.12.2", features = ["serde"] }
+evdevil = "0.1.1"

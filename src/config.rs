@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fs, path::Path};
 
 use anyhow::bail;
-use serde::Deserialize;
+use serde::{de::Visitor, Deserialize};
 
 #[derive(Deserialize)]
 pub struct Config {
@@ -33,6 +33,37 @@ impl Config {
     }
 }
 
+#[derive(PartialEq, Eq, Hash)]
+pub struct Key(pub(crate) evdevil::event::Key);
+
+impl<'a> Deserialize<'a> for Key {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'a>,
+    {
+        struct FromStrVisitor;
+
+        impl<'de> Visitor<'de> for FromStrVisitor {
+            type Value = Key;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("evdev key name")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Key(v.parse().map_err(|_| {
+                    E::custom(format_args!("invalid evdev key name '{v}'"))
+                })?))
+            }
+        }
+
+        deserializer.deserialize_str(FromStrVisitor)
+    }
+}
+
 #[derive(Deserialize)]
 pub struct Device {
     pub name: String,
@@ -42,7 +73,7 @@ pub struct Device {
     pub tablet: bool,
     pub ratio: Option<f32>,
     #[serde(default)]
-    pub bind: HashMap<evdev::Key, CommandVerb>,
+    pub bind: HashMap<Key, CommandVerb>,
 }
 
 #[derive(Debug, Deserialize)]
