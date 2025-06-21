@@ -83,8 +83,8 @@ fn input_main_loop(
 
         let keys = device.supported_keys()?;
         for key in dev.bind.keys() {
-            if !keys.contains(key.0) {
-                bail!("input device '{name}' input {:?} is bounds to an action, but the device does not have that key", key.0)
+            if !keys.contains(*key) {
+                bail!("input device '{name}' input {:?} is bounds to an action, but the device does not have that key", key)
             }
         }
 
@@ -202,7 +202,7 @@ fn device_main(
                     // FIXME: Doesn't really handle having multiple tools active at once.
                     // The last tool should override the first, and when released should go back to
                     // the previous tool (if still pressed), so I guess there should be a stack.
-                    if let Some(verb) = config.bind.get(&config::Key(ev.key())) {
+                    if let Some(verb) = config.bind.get(&ev.key()) {
                         match verb {
                             CommandVerb::ToolEraser => {
                                 if pressed {
