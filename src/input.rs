@@ -168,15 +168,13 @@ fn device_main(
         None
     };
 
-    device.set_nonblocking(true)?;
     let mut reader = device.into_reader()?;
-
     loop {
-        reader.evdev().block_until_readable()?;
+        let report = reader.next_report()?;
 
         // Update state based on all events received in this report.
-        for event in reader.events() {
-            let Some(ev) = event?.kind() else { continue };
+        for event in report {
+            let Some(ev) = event.kind() else { continue };
 
             match ev {
                 EventKind::Abs(ev) => {
