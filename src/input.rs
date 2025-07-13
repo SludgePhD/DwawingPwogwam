@@ -56,10 +56,7 @@ fn input_main_loop(
         let name = match device.name() {
             Ok(name) => name,
             Err(e) => {
-                log::warn!(
-                    "failed to fetch name of '{}': {e}",
-                    device.path().unwrap().display()
-                );
+                log::warn!("failed to fetch name of '{}': {e}", device.path().display());
                 continue;
             }
         };
@@ -71,7 +68,7 @@ fn input_main_loop(
 
         log::info!(
             "found matching input device at `{}`: {name}",
-            device.path().unwrap().display()
+            device.path().display()
         );
 
         if dev.tablet {
@@ -168,15 +165,12 @@ fn device_main(
         None
     };
 
-    let mut reader = device.into_reader()?;
-    loop {
-        let report = reader.next_report()?;
+    for res in device.into_reader()?.reports() {
+        let report = res?;
 
         // Update state based on all events received in this report.
         for event in report {
-            let Some(ev) = event.kind() else { continue };
-
-            match ev {
+            match event.kind() {
                 EventKind::Abs(ev) => {
                     if let Some(tab) = &mut tablet_state {
                         if ev.abs() == Abs::X {
@@ -239,4 +233,6 @@ fn device_main(
             });
         }
     }
+
+    Ok(())
 }

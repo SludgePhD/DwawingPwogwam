@@ -10,13 +10,13 @@ env_logger = { version = "0.11.3", default-features = false, features = ["auto-c
 
 # window management and drawing
 winit = { version = "0.30.4", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
-wgpu = "25.0.2"
+wgpu = "26.0.1"
 pollster = "0.4.0"
 raw-window-handle = "0.6.1"
 bytemuck = { version = "1", features = ["derive"] }
 half = { version = "2.4.1", features = ["bytemuck"] }
 
 # config parsing and input handling
-toml = { version = "0.8.23", default-features = false, features = ["parse"] }
+toml = { version = "0.9.2", default-features = false, features = ["parse", "serde"] }
 serde = { version = "1.0.147", features = ["derive"] }
-evdevil = { version = "0.1.3", features = ["serde"] }
+evdevil = { version = "0.2.1", features = ["serde"] }

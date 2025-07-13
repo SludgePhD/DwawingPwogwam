@@ -388,6 +388,7 @@ impl Win {
                         },
                         ..Default::default()
                     },
+                    depth_slice: None,
                 })],
                 ..Default::default()
             });
